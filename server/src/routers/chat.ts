@@ -84,7 +84,7 @@ export const chatRouter = t.router({
       const history = chatHistories.get(FIXED_SESSION_ID)!;
       const memory = longTermMemories[FIXED_SESSION_ID] || { summary: "", lastUpdatedAt: "", messageCountAtLastSummary: 0 };
 
-      // 가장 확실한 한국 표준시(KST) 포맷팅 방식
+      // 한국 표준시(KST)로 정확한 현재 날짜와 시간 가져오기
       const now = new Date();
       const formatter = new Intl.DateTimeFormat('ko-KR', {
         year: 'numeric',
