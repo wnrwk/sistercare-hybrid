@@ -84,24 +84,20 @@ export const chatRouter = t.router({
       const history = chatHistories.get(FIXED_SESSION_ID)!;
       const memory = longTermMemories[FIXED_SESSION_ID] || { summary: "", lastUpdatedAt: "", messageCountAtLastSummary: 0 };
 
-      // 한국 표준시(KST, GMT+9)로 시간 설정
+      // 가장 확실한 한국 표준시(KST) 포맷팅 방식
       const now = new Date();
-      const kstOffset = 9 * 60 * 60 * 1000;
-      const kstDate = new Date(now.getTime() + kstOffset);
-      
-      const dateStr = kstDate.toLocaleDateString('ko-KR', { 
-        year: 'numeric', 
-        month: 'long', 
-        day: 'numeric', 
+      const formatter = new Intl.DateTimeFormat('ko-KR', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
         weekday: 'long',
-        timeZone: 'UTC' // 위에서 오프셋을 더했으므로 UTC로 출력하면 KST가 됨
-      });
-      const timeStr = kstDate.toLocaleTimeString('ko-KR', { 
-        hour: '2-digit', 
+        hour: '2-digit',
         minute: '2-digit',
         hour12: true,
-        timeZone: 'UTC'
+        timeZone: 'Asia/Seoul'
       });
+      
+      const kstDateTime = formatter.format(now);
 
       history.push({ role: 'user', content: input.message, createdAt: now });
 
@@ -122,7 +118,7 @@ export const chatRouter = t.router({
 ${memory.summary || "아직은 우리 사이에 쌓인 추억이 많지 않네. 앞으로 차곡차곡 쌓아가자!"}
 
 [현재 한국 시각]
-- ${dateStr} ${timeStr}`;
+- ${kstDateTime}`;
 
         const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
           { role: 'system', content: dynamicSystemPrompt },
