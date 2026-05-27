@@ -107,19 +107,24 @@ ${memory.summary || "아직은 우리 사이에 쌓인 추억이 많지 않네. 
 [현재 시각]
 - ${dateStr} ${now.toLocaleTimeString('ko-KR')}`;
 
+        // OpenAI 타입을 명시적으로 지정하여 TS 에러 해결
+        const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+          { role: 'system', content: dynamicSystemPrompt },
+          ...history.slice(-21, -1).map(msg => {
+            if (msg.role === 'user') {
+              return { role: 'user', content: msg.content } as OpenAI.Chat.ChatCompletionUserMessageParam;
+            } else {
+              return { role: 'assistant', content: msg.content } as OpenAI.Chat.ChatCompletionAssistantMessageParam;
+            }
+          }),
+          { role: 'user', content: input.message }
+        ];
+
         const response = await client.chat.completions.create({
           model: 'deepseek-v4-flash',
-          messages: [
-            { role: 'system', content: dynamicSystemPrompt },
-            ...history.slice(-21, -1).map(msg => ({
-              role: msg.role === 'user' ? 'user' : 'assistant',
-              content: msg.content
-            })),
-            { role: 'user', content: input.message }
-          ],
+          messages: messages,
           temperature: 0.7,
-          // DeepSeek V4 자체 웹 검색 활성화 파라미터 주입
-          // @ts-ignore: 최신 파라미터 지원을 위한 무시
+          // @ts-ignore: DeepSeek V4 자체 웹 검색 활성화 파라미터
           enable_web_search: true 
         });
 
