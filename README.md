@@ -1,4 +1,4 @@
-# SisterCare Hybrid (AI 누나) 🌸
+# SisterCare deepseek (AI 누나) 🌸
 
 최신 **DeepSeek-V4-Flash** 모델의 강력한 지능과 자체 웹 검색 기능을 활용한 AI 캐릭터 서비스입니다.
 
