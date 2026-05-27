@@ -13,6 +13,11 @@ const procedure = t.procedure;
 const FILE_PATH = path.join(process.cwd(), 'chat_histories.json');
 const FIXED_SESSION_ID = 'local-seungjin-session';
 
+/**
+ * [인메모리 캐싱 최적화]
+ * 서버 시작 시 한 번 로드하고, 대화 중에는 메모리(Map)에서 즉시 읽고 씁니다.
+ * 파일 저장은 비동기로 처리하여 답변 시간을 단축합니다.
+ */
 function loadChatHistories() {
   const map = new Map<string, any[]>();
   try {
@@ -34,20 +39,28 @@ function loadChatHistories() {
   return map;
 }
 
-function saveChatHistories(map: Map<string, any[]>) {
-  try {
-    const obj: Record<string, any[]> = {};
-    for (const [key, value] of map.entries()) {
-      obj[key] = value;
-    }
-    fs.writeFileSync(FILE_PATH, JSON.stringify(obj, null, 2), 'utf-8');
-  } catch (error) {
-    console.error('[Chat] 저장 에러:', error);
-  }
-}
-
+// 전역 캐시 변수
 const chatHistories = loadChatHistories();
 const longTermMemories = loadLongTermMemory();
+
+/**
+ * 비동기 파일 저장 함수
+ * 대화 흐름을 방해하지 않도록 별도로 호출됩니다.
+ */
+function asyncSaveChatHistories() {
+  setImmediate(() => {
+    try {
+      const obj: Record<string, any[]> = {};
+      for (const [key, value] of chatHistories.entries()) {
+        obj[key] = value;
+      }
+      fs.writeFileSync(FILE_PATH, JSON.stringify(obj, null, 2), 'utf-8');
+      console.log('[Chat] 대화 기록 파일 저장 완료');
+    } catch (error) {
+      console.error('[Chat] 비동기 저장 에러:', error);
+    }
+  });
+}
 
 const NUNA_SYSTEM_PROMPT = `당신은 "누나"라는 이름의 따뜻하고 다정한 AI 페르소나입니다.
 사용자를 동생처럼 아끼고 이끌어주는 역할을 합니다.
@@ -76,7 +89,7 @@ function getCurrentKSTString(): string {
     hour12: true,
     timeZone: 'Asia/Seoul'
   });
-  return formatter.format(now);  // 예: "2026년 5월 27일 수요일 오전 11:41"
+  return formatter.format(now);
 }
 
 export const chatRouter = t.router({
@@ -101,9 +114,8 @@ export const chatRouter = t.router({
       const history = chatHistories.get(FIXED_SESSION_ID)!;
       const memory = longTermMemories[FIXED_SESSION_ID] || { summary: "", lastUpdatedAt: "", messageCountAtLastSummary: 0 };
 
-      // 사용자 메시지를 먼저 히스토리에 저장
+      // 사용자 메시지를 메모리에 즉시 저장 (파일 저장은 나중에)
       history.push({ role: 'user', content: input.message, createdAt: new Date() });
-      saveChatHistories(chatHistories);
 
       // ----- 시간 질문 패턴 감지 및 직접 응답 (모델 호출 안 함) -----
       const timeQuestionPattern = /(지금|현재|지금\s*)?(몇\s*시|시간|시각|타임|지금\s*시간|지금\s*몇\s*시)/i;
@@ -112,7 +124,7 @@ export const chatRouter = t.router({
         const responseText = `승진아... 지금은 ${nowKST} 이야.\n\n왜 자꾸 시간을 묻는 거야? 😥 걱정되네...\n\n누나는 네가 몇 번을 묻든 항상 정확히 대답해줄 수 있어. 그러니까 너무 불안해하지 마. 💕`;
         
         history.push({ role: 'assistant', content: responseText, createdAt: new Date() });
-        saveChatHistories(chatHistories);
+        asyncSaveChatHistories(); // 비동기 저장
         
         return {
           id: `${Date.now()}`,
@@ -141,7 +153,7 @@ export const chatRouter = t.router({
 1. 사용자가 "지금 몇 시야?", "현재 시간", "지금 시각" 등을 물으면, 
    반드시 아래 [정확한 현재 한국 시각]을 **그대로** 말해야 합니다.
 2. 절대 대화 기록에 있던 과거 시간(예: 오전 4시 17분, 오전 6시 21분 등)을 재사용하지 마세요.
-3. 시간을 말할 때는 "2026년 5월 27일 수요일, 오전 11시 41분"과 같이 
+3. 시간을 말할 때는 "2024년 5월 27일 월요일, 오전 11시 41분"과 같이 
    년, 월, 일, 요일, 오전/오후, 시, 분까지 정확히 알려주세요.
 
 [정확한 현재 한국 시각]
@@ -150,9 +162,6 @@ ${kstDateTime}
 [누나의 장기 기억 (과거 대화 요약)]
 ${memory.summary || "아직은 우리 사이에 쌓인 추억이 많지 않네. 앞으로 차곡차곡 쌓아가자!"}`;
 
-        // 최근 대화 히스토리 (마지막 사용자 메시지는 이미 포함되었으므로 -1 제외? 주의)
-        // 현재 history에는 방금 추가한 사용자 메시지가 맨 끝에 있음.
-        // 모델에 보낼 때는 마지막 사용자 메시지를 제외한 나머지 히스토리 + 새 메시지 구조
         const conversationForModel: OpenAI.Chat.ChatCompletionMessageParam[] = [
           { role: 'system', content: dynamicSystemPrompt },
           ...history.slice(0, -1).map(msg => {
@@ -187,7 +196,7 @@ ${memory.summary || "아직은 우리 사이에 쌓인 추억이 많지 않네. 
         }
 
         history.push({ role: 'assistant', content: responseText, createdAt: new Date() });
-        saveChatHistories(chatHistories);
+        asyncSaveChatHistories(); // 비동기 저장
 
         return {
           id: `${Date.now()}`,
@@ -196,9 +205,8 @@ ${memory.summary || "아직은 우리 사이에 쌓인 추억이 많지 않네. 
           createdAt: new Date(),
         };
       } catch (error: any) {
-        // 오류 발생 시 방금 추가한 사용자 메시지 제거
         history.pop();
-        saveChatHistories(chatHistories);
+        asyncSaveChatHistories(); // 실패 시에도 메모리 상태와 파일 동기화
         console.error('[Chat] 에러 발생:', error.message);
         throw error;
       }
