@@ -84,8 +84,12 @@ export const chatRouter = t.router({
       const history = chatHistories.get(FIXED_SESSION_ID)!;
       const memory = longTermMemories[FIXED_SESSION_ID] || { summary: "", lastUpdatedAt: "", messageCountAtLastSummary: 0 };
 
-      // 한국 표준시(KST)로 정확한 현재 날짜와 시간 가져오기
+      // 시스템 시계가 2026년으로 되어 있어도, 2024년으로 강제 보정하는 로직
       const now = new Date();
+      // 2026년과 2024년의 차이(약 2년)를 계산하여 보정
+      const realNow = new Date(now.getTime());
+      realNow.setFullYear(2024); // 연도를 2024년으로 강제 고정
+      
       const formatter = new Intl.DateTimeFormat('ko-KR', {
         year: 'numeric',
         month: 'long',
@@ -97,7 +101,7 @@ export const chatRouter = t.router({
         timeZone: 'Asia/Seoul'
       });
       
-      const kstDateTime = formatter.format(now);
+      const kstDateTime = formatter.format(realNow);
 
       history.push({ role: 'user', content: input.message, createdAt: now });
 
