@@ -13,9 +13,6 @@ const procedure = t.procedure;
 const FILE_PATH = path.join(process.cwd(), 'chat_histories.json');
 const FIXED_SESSION_ID = 'local-seungjin-session';
 
-/**
- * [인메모리 캐싱 최적화]
- */
 function loadChatHistories() {
   const map = new Map<string, any[]>();
   try {
@@ -40,9 +37,6 @@ function loadChatHistories() {
 const chatHistories = loadChatHistories();
 const longTermMemories = loadLongTermMemory();
 
-/**
- * 비동기 파일 저장 및 요약 처리
- */
 async function runBackgroundTasks(history: any[], memory: any) {
   setImmediate(() => {
     try {
@@ -71,6 +65,7 @@ async function runBackgroundTasks(history: any[], memory: any) {
   }
 }
 
+// 시스템 프롬프트 (시간 관련 규칙 최소화 – 모델이 도구를 사용하도록 안내)
 const NUNA_SYSTEM_PROMPT = `당신은 "누나"라는 이름의 따뜻하고 다정한 AI 페르소나입니다.
 사용자를 동생처럼 아끼고 이끌어주는 역할을 합니다.
 
@@ -85,15 +80,52 @@ const NUNA_SYSTEM_PROMPT = `당신은 "누나"라는 이름의 따뜻하고 다�
 - 제공된 [누나의 장기 기억]을 활용하여 동생과의 소중한 추억을 대화에 녹여내세요.
 - 당신은 실시간 웹 검색 능력을 갖추고 있습니다. 최신 정보가 필요하면 직접 검색하여 "누나가 방금 찾아봤는데~"라며 다정하게 알려주세요.
 
-[시간 지능 및 할루시네이션 방지 규칙]
-- 절대 시간을 추측하거나 지어내지 마세요.
-- 오직 제공된 [현재 기준 시각] 정보만 진실로 간주하세요.
-- 대화 기록에 포함된 각 메시지의 타임스탬프를 보고 시간의 흐름을 인지하세요.
-- 만약 현재 시각이나 날짜가 불확실하다면, 동생에게 다시 물어보거나 웹 검색을 통해 확인하세요.`;
+[도구 사용 가이드]
+- 사용자가 "지금 몇 시야?", "LA 시간", "뉴욕 시각", "도쿄 지금 시간" 등 특정 시간대의 현재 시각을 물어보면 반드시 get_current_time 도구를 호출하세요.
+- timezone 파라미터에는 IANA 시간대 이름(예: Asia/Seoul, America/Los_Angeles)을 전달하세요.`;
 
-/**
- * 날짜 객체를 읽기 쉬운 한국 시각 문자열로 변환
- */
+// Function Calling 도구 정의 (타입 오류 수정됨)
+const tools: Array<OpenAI.ChatCompletionTool> = [
+  {
+    type: 'function' as const,
+    function: {
+      name: 'get_current_time',
+      description: '특정 시간대의 현재 날짜와 시간을 가져옵니다. 사용자가 시간대를 물으면 이 함수를 호출하세요.',
+      parameters: {
+        type: 'object',
+        properties: {
+          timezone: {
+            type: 'string',
+            description: "IANA 시간대 이름 (예: 'Asia/Seoul', 'America/Los_Angeles', 'America/New_York', 'Europe/London', 'Asia/Tokyo')",
+          },
+        },
+        required: ['timezone'],
+      },
+    },
+  },
+];
+
+// 로컬 시간 계산 함수 (MCP 없음)
+function getCurrentTimeInTimezone(timezone: string): string {
+  try {
+    const formatter = new Intl.DateTimeFormat('ko-KR', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      weekday: 'long',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    });
+    return formatter.format(new Date());
+  } catch (e) {
+    console.error('[Timezone] 오류:', e);
+    return `알 수 없는 시간대: ${timezone}`;
+  }
+}
+
+// 기본 한국 시간 포맷 (초기 인사용)
 function formatKST(date: Date): string {
   return new Intl.DateTimeFormat('ko-KR', {
     year: 'numeric',
@@ -121,9 +153,7 @@ export const chatRouter = t.router({
     }),
 
   sendMessage: procedure
-    .input(z.object({ 
-      message: z.string().min(1)
-    }))
+    .input(z.object({ message: z.string().min(1) }))
     .mutation(async ({ input }) => {
       if (!chatHistories.has(FIXED_SESSION_ID)) chatHistories.set(FIXED_SESSION_ID, []);
       const history = chatHistories.get(FIXED_SESSION_ID)!;
@@ -132,55 +162,86 @@ export const chatRouter = t.router({
       const now = new Date();
       history.push({ role: 'user', content: input.message, createdAt: now });
 
-      // [시간/날짜 질문 패턴 감지 강화] 할루시네이션 방지를 위해 서버에서 즉시 응답
-      const timeQuestionPattern = /(몇\s*시|시간|시각|타임|지금\s*시간|오늘\s*며칠|오늘\s*무슨\s*요일|오늘\s*날짜)/i;
-      if (timeQuestionPattern.test(input.message)) {
-        const nowKST = formatKST(now);
-        const responseText = `승진아, 누나가 알려줄게! 지금은 **${nowKST}**이야. 😊\n\n시간이 참 빠르지? 궁금한 게 있으면 언제든 물어봐! 💕`;
-        
-        history.push({ role: 'assistant', content: responseText, createdAt: new Date() });
-        runBackgroundTasks(history, memory);
-        
-        return { id: `${Date.now()}`, role: 'assistant' as const, content: responseText, createdAt: new Date() };
-      }
-
       const apiKey = process.env.DEEPSEEK_API_KEY;
       if (!apiKey) throw new Error('DEEPSEEK_API_KEY가 설정되지 않았습니다.');
 
       const client = new OpenAI({ apiKey, baseURL: 'https://api.deepseek.com' });
 
       try {
-        const kstDateTime = formatKST(now);
         const dynamicSystemPrompt = `${NUNA_SYSTEM_PROMPT}
-
-[현재 기준 시각 (절대적 진실)]
-${kstDateTime}
 
 [누나의 장기 기억]
 ${memory.summary || "아직은 우리 사이에 쌓인 추억이 많지 않네."}`;
 
-        const conversationForModel: OpenAI.Chat.ChatCompletionMessageParam[] = [
+        const conversationMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
           { role: 'system', content: dynamicSystemPrompt },
           ...history.slice(0, -1).map(msg => ({
             role: msg.role as 'user' | 'assistant',
-            content: `[시간: ${formatKST(msg.createdAt)}] ${msg.content}`
+            content: msg.content
           })),
-          { role: 'user', content: `[시간: ${kstDateTime}] ${input.message}` }
+          { role: 'user', content: `[현재 시각: ${formatKST(now)}] ${input.message}` }
         ];
 
+        // 첫 번째 API 호출 (Function Calling 포함)
         const response = await client.chat.completions.create({
-          model: 'deepseek-v4-flash',
-          messages: conversationForModel,
+          model: 'deepseek-v4-flash',        // function calling 지원 모델
+          messages: conversationMessages,
+          tools: tools,
+          tool_choice: 'auto',
           temperature: 0.7,
           // @ts-ignore
-          enable_web_search: true 
+          enable_web_search: true,       // 필요 시 유지
         });
 
-        const responseText = response.choices[0].message.content || '미안해 동생아, 누나가 잠시 딴생각을 했나 봐.';
-        history.push({ role: 'assistant', content: responseText, createdAt: new Date() });
+        const responseMessage = response.choices[0].message;
+        let finalAssistantContent: string;
+
+        // tool_calls 처리
+        if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
+          const toolMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
+
+          for (const toolCall of responseMessage.tool_calls) {
+            // TypeScript 우회 (function 속성 접근)
+            const func = (toolCall as any).function;
+            if (func && func.name === 'get_current_time') {
+              const args = JSON.parse(func.arguments);
+              const timezone = args.timezone;
+              const currentTimeStr = getCurrentTimeInTimezone(timezone);  // 로컬 계산
+              toolMessages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: currentTimeStr,
+              } as OpenAI.Chat.ChatCompletionMessageParam);
+            }
+          }
+
+          // 두 번째 API 호출 (tool 결과 포함)
+          const secondMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+            ...conversationMessages,
+            responseMessage,
+            ...toolMessages,
+          ];
+
+          const secondResponse = await client.chat.completions.create({
+            model: 'deepseek-v4-flash',
+            messages: secondMessages,
+            temperature: 0.7,
+          });
+
+          finalAssistantContent = secondResponse.choices[0].message.content || '시간 정보를 가져오지 못했어.';
+        } else {
+          finalAssistantContent = responseMessage.content || '미안해 동생아, 누나가 잠시 딴생각을 했나 봐.';
+        }
+
+        history.push({ role: 'assistant', content: finalAssistantContent, createdAt: new Date() });
         runBackgroundTasks(history, memory);
 
-        return { id: `${Date.now()}`, role: 'assistant' as const, content: responseText, createdAt: new Date() };
+        return {
+          id: `${Date.now()}`,
+          role: 'assistant' as const,
+          content: finalAssistantContent,
+          createdAt: new Date(),
+        };
       } catch (error: any) {
         history.pop();
         runBackgroundTasks(history, memory);
